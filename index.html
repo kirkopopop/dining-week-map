@@ -1156,8 +1156,9 @@ function buildVectorMap() {
         opacity: metro ? 0.9 : l.options.tunnel ? 0.55 : 0.9, dashArray: null });
     });
   };
-  // Show detail by zoom level: side streets only when zoomed in.
-  const show = (layer, minZ) => { const on = map.getZoom() >= minZ; if (on && !map.hasLayer(layer)) layer.addTo(map); if (!on && map.hasLayer(layer)) map.removeLayer(layer); };
+  // Show detail by zoom level: side streets only when zoomed in. Hidden entirely when a tile map is chosen.
+  let builtInOn = true;
+  const show = (layer, minZ) => { const on = builtInOn && map.getZoom() >= minZ; if (on && !map.hasLayer(layer)) layer.addTo(map); if (!on && map.hasLayer(layer)) map.removeLayer(layer); };
   const byZoom = () => {
     show(V.green, 11); show(V.water, 9); show(V.case2, 12); show(V.r2, 9); show(V.r1, 7);
     show(V.case3, 14); show(V.r3, 12); show(V.minor, 14);
@@ -1168,46 +1169,42 @@ function buildVectorMap() {
   const key = document.getElementById("transitKey"); key.hidden = false;
   map.on("overlayadd", e => { if (e.layer === rail) key.hidden = false; });
   map.on("overlayremove", e => { if (e.layer === rail) key.hidden = true; });
-  L.control.layers(null, { "Train, S-tog, Metro & Letbane": rail }, { position: "topleft", collapsed: true }).addTo(map);
+
+  // One layer menu: the built-in map is the default background; tile maps are added as options when they can load.
+  const builtIn = L.layerGroup().addTo(map);
+  const ctl = L.control.layers({ "Built-in map": builtIn }, { "Train, S-tog, Metro & Letbane": rail }, { position: "topleft", collapsed: true }).addTo(map);
+  const wrap = document.querySelector(".mapwrap");
+  map.on("baselayerchange", ev => {
+    builtInOn = ev.layer === builtIn;
+    const tone = builtInOn ? null : ev.layer.options.tone;
+    wrap.classList.toggle("lightmap", tone === "light"); wrap.classList.toggle("darkmap", tone === "dark");
+    document.documentElement.classList.toggle("has-tiles", !builtInOn);
+    const c = colors();
+    landLayer.setStyle(builtInOn ? { fillColor: c.land, color: c.coast, fillOpacity: 1, opacity: 1 } : { fillOpacity: 0, opacity: 0 });
+    byZoom();
+    markers.forEach((m, id) => m.setStyle(styleFor(byId.get(id), id === state.sel)));
+  });
   map.attributionControl.addAttribution("Streets & rail: © OpenStreetMap contributors");
   window.__restyleVector = vstyle;
+  window.__layerCtl = ctl;
 }
+buildVectorMap();
 
-// Real street maps: these load when the page is opened as a file on your computer
-// (the Artifact viewer blocks outside map images, so there only the built-in outline shows).
-(function tryTiles() {
+// Optional tile maps (Esri; they add street names). Offered in the layer menu when they can load:
+// on GitHub Pages or a local file, not inside Claude, where outside map images are blocked.
+(function offerTiles() {
   const probe = new Image();
   probe.onload = () => {
-    if (vectorOn) return;  // built-in map already drawn (slow connection); keep it
-    tilesOk = true;
     const esri = "https://server.arcgisonline.com/ArcGIS/rest/services/";
     const esriAttr = 'Tiles © Esri, HERE, Garmin, © OpenStreetMap contributors';
     const esriLayer = (svc, opts = {}) => L.tileLayer(esri + svc + "/MapServer/tile/{z}/{y}/{x}", Object.assign({ maxZoom: 19, attribution: esriAttr }, opts));
     const tone = (layer, t) => { layer.options.tone = t; return layer; };
-    const bases = {
-      "Light grey": tone(L.layerGroup([esriLayer("Canvas/World_Light_Gray_Base", { maxNativeZoom: 16 }), esriLayer("Canvas/World_Light_Gray_Reference", { maxNativeZoom: 16 })]), "light"),
-      "Streets (colour)": tone(esriLayer("World_Street_Map"), "light"),
-      "Public transport": tone(L.tileLayer("https://tile.memomaps.de/tilegen/{z}/{x}/{y}.png", { maxZoom: 18, attribution: 'Map © <a href="https://memomaps.de/">memomaps.de</a> CC-BY-SA, data © OpenStreetMap contributors' }), "light"),
-      "Dark grey": tone(L.layerGroup([esriLayer("Canvas/World_Dark_Gray_Base", { maxNativeZoom: 16 }), esriLayer("Canvas/World_Dark_Gray_Reference", { maxNativeZoom: 16 })]), "dark"),
-    };
-    const transit = L.tileLayer("https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png", {
-      subdomains: "abc", maxZoom: 19, opacity: 0.85,
-      attribution: 'Rail: © <a href="https://www.openrailwaymap.org/">OpenRailwayMap</a>'
-    });
-    const wrap = document.querySelector(".mapwrap");
-    const setTone = t => { wrap.classList.toggle("lightmap", t === "light"); wrap.classList.toggle("darkmap", t === "dark");
-      markers.forEach((m, id) => m.setStyle(styleFor(byId.get(id), id === state.sel))); };
-    map.on("baselayerchange", e => setTone(e.layer.options.tone));
-    bases["Light grey"].addTo(map); setTone("light");
-    transit.addTo(map);
-    L.control.layers(bases, { "Train, S-tog, Metro & Letbane": transit }, { position: "topleft", collapsed: true }).addTo(map);
-    landLayer.setStyle({ fillOpacity: 0, opacity: 0 });
-    document.documentElement.classList.add("has-tiles");
+    const ctl = window.__layerCtl;
+    ctl.addBaseLayer(tone(L.layerGroup([esriLayer("Canvas/World_Light_Gray_Base", { maxNativeZoom: 16 }), esriLayer("Canvas/World_Light_Gray_Reference", { maxNativeZoom: 16 })]), "light"), "Light grey (street names)");
+    ctl.addBaseLayer(tone(esriLayer("World_Street_Map"), "light"), "Streets (colour)");
+    ctl.addBaseLayer(tone(L.tileLayer("https://tile.memomaps.de/tilegen/{z}/{x}/{y}.png", { maxZoom: 18, attribution: 'Map © <a href="https://memomaps.de/">memomaps.de</a> CC-BY-SA, data © OpenStreetMap contributors' }), "light"), "Public transport");
+    ctl.addBaseLayer(tone(L.layerGroup([esriLayer("Canvas/World_Dark_Gray_Base", { maxNativeZoom: 16 }), esriLayer("Canvas/World_Dark_Gray_Reference", { maxNativeZoom: 16 })]), "dark"), "Dark grey (street names)");
   };
-  let tilesOk = false;
-  const fallback = () => { if (!tilesOk) buildVectorMap(); };
-  probe.onerror = fallback;
-  setTimeout(fallback, 4000);
   probe.src = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/10/320/547";
 })();
 
