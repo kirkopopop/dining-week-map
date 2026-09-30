@@ -1,0 +1,65 @@
+name: Update availability and publish map
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "7 * * * *"   # every hour at :07 (GitHub may run it a few minutes late)
+  workflow_dispatch:       # "Run workflow" button for an update right now
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Stop hourly updates after Dining Week
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%Y%m%d)" -gt 20261019 ]; then
+            echo "Dining Week 2026 is over; skipping the hourly update."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Fetch availability from diningweek.dk
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          pip install --quiet requests beautifulsoup4
+          mkdir -p site
+          cp index.html site/index.html
+          python scripts/update_availability.py site/availability.json
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.gate.outputs.run == 'true'
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
